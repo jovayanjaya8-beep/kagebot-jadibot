@@ -1,0 +1,21 @@
+FROM node:22-slim
+ENV PUPPETEER_SKIP_DOWNLOAD=true NODE_ENV=production
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ffmpeg imagemagick webp python3 ca-certificates curl unzip \
+    libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libjpeg62-turbo libgif7 librsvg2-2 \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+# Kode aplikasi diambil dari Google Drive dalam 7 bagian (berurutan), digabung lalu diverifikasi sha256.
+ARG APP_PARTS="17tF-SBcg3AnTMl3RdqD0RviMvWZSp736 1GIS0w1H5dsJawYtNC3-OctowFX85flwp 1nXdfMxRoLQlCzUho6_lnTnr_GxZ5M1D9 1l4BC6EDoZP-AAGONDabDB8lf5-q5ZXKH 1ni6lyXKDzkwUhdNX_RQfuSdwX3mB-MpB 1JOFIPxonCJ3HNydomvcMISYSic-Zjwmr 1nxUR7rl_g-04R9xpPeXTHUAn3_BiT1mq"
+ARG APP_SHA256="e36609efd7813d9718227103a6252075ac5e41ee3b33d744b2518c30c2e43996"
+RUN rm -f /tmp/app.zip; for id in $APP_PARTS; do \
+      curl -fsSL "https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t" >> /tmp/app.zip || exit 1; \
+    done \
+    && echo "$APP_SHA256  /tmp/app.zip" | sha256sum -c - \
+    && unzip -q /tmp/app.zip -d /app \
+    && rm /tmp/app.zip
+# Perbaiki otomatis paket yang versinya tidak ada di npm (pakai versi terbaru)
+RUN node -e "const fs=require('fs'),cp=require('child_process');const p=JSON.parse(fs.readFileSync('package.json'));for(const [k,v] of Object.entries(p.dependencies)){if(/^(npm|github):/.test(v))continue;let o='';try{o=cp.execFileSync('npm',['view',k+'@'+v,'version'],{stdio:['ignore','pipe','ignore']}).toString().trim()}catch(e){}if(!o){console.log('FIX',k,v);p.dependencies[k]='latest'}}fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
+RUN npm install --omit=dev --no-audit --no-fund
+EXPOSE 3000
+CMD ["sh", "/app/start.sh"]
