@@ -1,0 +1,23 @@
+FROM node:22-slim
+ENV PUPPETEER_SKIP_DOWNLOAD=true NODE_ENV=production
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ffmpeg imagemagick webp python3 make g++ ca-certificates curl unzip \
+    libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libjpeg62-turbo libgif7 librsvg2-2 \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+# Kode aplikasi (bot VeltrixStore) diambil dari Google Drive dalam 5 bagian, digabung lalu diverifikasi sha256.
+ARG APP_PARTS="15eJX7hXvYrheCxRA4jRFCtYPJc6QwnRT 1EdNWmIp8BIPTbzBWaz018tFoiRMuL1N1 1zGDiceW4yBl7W8myqb-jIqh15hrdSfUY 1OPWl1MW6EoJpbtkjhI0Ca-pKwhy9tNDL 1UQkwpQtQkn2hGI6v-Bv7Y81_GrdSC7Sp 1jvKtaxzObCApWOw0NzjDoinRmC0cTVHk 1JWjKTI40mNaxyi2Y4VEDDe6lxbXPZhqt 1n1J-8gCBIUPcqsh0lUCFyjfgEBBiUnfN"
+ARG APP_SHA256="cb8268870539642d51d0d8be3d08ee520f7be930d175836244d305394dd9341e"
+RUN rm -f /tmp/app.zip; for id in $APP_PARTS; do \
+      curl -fsSL "https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t" >> /tmp/app.zip || exit 1; \
+    done \
+    && echo "$APP_SHA256  /tmp/app.zip" | sha256sum -c - \
+    && unzip -q /tmp/app.zip -d /app \
+    && rm /tmp/app.zip
+# Perbaiki otomatis paket yang versinya tidak ada di npm (pakai versi terbaru)
+RUN node -e "const fs=require('fs'),cp=require('child_process');const p=JSON.parse(fs.readFileSync('package.json'));for(const [k,v] of Object.entries(p.dependencies)){if(/^npm:/.test(v)){const n=v.slice(4).replace(/@.*$/,'');console.log('ALIAS',k,n);try{console.log(cp.execFileSync('npm',['view',n,'versions','dist-tags','--json']).toString().slice(0,600))}catch(e){console.log('VIEWFAIL',e.message.slice(0,200))}continue}if(/^github:/.test(v))continue;let o='';try{o=cp.execFileSync('npm',['view',k+'@'+v,'version'],{stdio:['ignore','pipe','ignore']}).toString().trim()}catch(e){}if(!o){console.log('FIX',k,v);p.dependencies[k]='latest'}}fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
+RUN npm install --omit=dev --no-audit --no-fund
+# Uji muat modul bot (ESM); paket yang kurang dipasang otomatis.
+RUN cd /app/bot && for i in $(seq 1 40); do rm -f /tmp/miss; node -e "import('ichigo').then(()=>import('/app/bot/vx.js')).then(()=>{console.log('PROBE-OK');process.exit(0)}).catch(e=>{const m=/Cannot find package '([^']+)'/.exec(e.message||'');if(m&&!/^[.\/]/.test(m[1])){const n=m[1].startsWith('@')?m[1].split('/').slice(0,2).join('/'):m[1].split('/')[0];require('fs').writeFileSync('/tmp/miss',n);process.exit(3)}console.error('PROBE-STOP:',(e.stack||e.message||'').split('\n').slice(0,8).join(' | '));process.exit(0)})" 2>/tmp/probe.err; [ -f /tmp/miss ] || { cat /tmp/miss; break; }; m=$(cat /tmp/miss); echo "INSTALL-MISSING $m"; (cd /app && npm install --omit=dev --no-audit --no-fund "$m") || break; done
+EXPOSE 3000
+CMD ["sh", "/app/start.sh"]
